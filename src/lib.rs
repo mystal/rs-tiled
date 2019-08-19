@@ -793,16 +793,20 @@ pub enum ObjectShape {
     Ellipse { width: f32, height: f32 },
     Polyline { points: Vec<(f32, f32)> },
     Polygon { points: Vec<(f32, f32)> },
+    //Tile { gid: u32, width: f32, height: f32 },
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Object {
     pub id: u32,
+    // TODO: Put this in the Tile ObjectShape.
     pub gid: u32,
     pub name: String,
     pub obj_type: String,
     pub x: f32,
     pub y: f32,
+    pub width: f32,
+    pub height: f32,
     pub rotation: f32,
     pub visible: bool,
     pub shape: ObjectShape,
@@ -877,6 +881,8 @@ impl Object {
             obj_type: t.clone(),
             x: x,
             y: y,
+            width: w,
+            height: h,
             rotation: r,
             visible: v,
             shape: shape,
@@ -1131,7 +1137,8 @@ pub fn parse_with_path<R: Read>(reader: R, path: &Path) -> Result<Map, TiledErro
 /// Parse a file hopefully containing a Tiled map and try to parse it.  If the
 /// file has an external tileset, the tileset file will be loaded using a path
 /// relative to the map file's path.
-pub fn parse_file(path: &Path) -> Result<Map, TiledError> {
+pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Map, TiledError> {
+    let path = path.as_ref();
     let file = File::open(path)
         .map_err(|_| TiledError::Other(format!("Map file not found: {:?}", path)))?;
     parse_impl(file, Some(path))
