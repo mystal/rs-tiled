@@ -1159,9 +1159,8 @@ fn parse_impl<R: Read>(reader: R, open_opts: &mut Option<OpenOptions<R>>) -> Res
 //    parse_impl(reader, Some(OpenOptions::new(path)))
 //}
 
-pub fn parse_file_with_fn<P, F, R>(path: P, mut open_fn: F) -> Result<Map, TiledError>
+pub fn parse_file_with_fn<P, R>(path: P, mut open_fn: Box<dyn FnMut(&Path) -> Option<R>>) -> Result<Map, TiledError>
     where P: AsRef<Path>,
-          F: FnMut(&Path) -> Option<R> + 'static,
           R: Read,
 {
     let path = path.as_ref();
@@ -1169,7 +1168,7 @@ pub fn parse_file_with_fn<P, F, R>(path: P, mut open_fn: F) -> Result<Map, Tiled
         .ok_or(TiledError::Other(format!("Map file not found: {:?}", path)))?;
     let open_opts = OpenOptions {
         map_path: path,
-        open_fn: Box::new(open_fn),
+        open_fn,
     };
     parse_impl(file, &mut Some(open_opts))
 }
