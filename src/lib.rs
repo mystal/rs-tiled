@@ -159,7 +159,7 @@ struct OpenOptions<'path, R>
     where R: Read,
 {
     map_path: &'path Path,
-    open_fn: Box<dyn FnMut(&Path) -> Option<R>>,
+    open_fn: Box<dyn FnMut(&Path) -> Option<R> + 'path>,
 }
 
 impl<'path> OpenOptions<'path, File>
@@ -1159,8 +1159,8 @@ fn parse_impl<R: Read>(reader: R, open_opts: Option<&mut OpenOptions<R>>) -> Res
 //    parse_impl(reader, Some(OpenOptions::new(path)))
 //}
 
-pub fn parse_file_with_fn<P, R>(path: P, mut open_fn: Box<dyn FnMut(&Path) -> Option<R>>) -> Result<Map, TiledError>
-    where P: AsRef<Path>,
+pub fn parse_file_with_fn<'path, P, R>(path: P, mut open_fn: Box<dyn FnMut(&Path) -> Option<R> + 'path>) -> Result<Map, TiledError>
+    where P: AsRef<Path> + 'path,
           R: Read,
 {
     let path = path.as_ref();
