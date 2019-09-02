@@ -265,7 +265,7 @@ impl Map {
     fn new<R: Read>(
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
-        open_opts: &mut Option<OpenOptions<R>>,
+        mut open_opts: Option<&mut OpenOptions<R>>,
     ) -> Result<Map, TiledError> {
         let (c, (v, o, w, h, tw, th)) = get_attrs!(
             attrs,
@@ -291,7 +291,7 @@ impl Map {
         let mut layer_index = 0;
         parse_tag!(parser, "map", {
             "tileset" => | attrs| {
-                tilesets.push(try!(Tileset::new(parser, attrs, open_opts)));
+                tilesets.push(try!(Tileset::new(parser, attrs, &mut open_opts)));
                 Ok(())
             },
             "layer" => |attrs| {
@@ -386,7 +386,7 @@ impl Tileset {
     fn new<R: Read>(
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
-        open_opts: &mut Option<OpenOptions<R>>,
+        open_opts: &mut Option<&mut OpenOptions<R>>,
     ) -> Result<Tileset, TiledError> {
         Tileset::new_internal(parser, &attrs).or_else(|_| Tileset::new_reference(&attrs, open_opts))
     }
@@ -437,7 +437,7 @@ impl Tileset {
 
     fn new_reference<R: Read>(
         attrs: &Vec<OwnedAttribute>,
-        open_opts: &mut Option<OpenOptions<R>>,
+        open_opts: &mut Option<&mut OpenOptions<R>>,
     ) -> Result<Tileset, TiledError> {
         let ((), (first_gid, source)) = get_attrs!(
             attrs,
@@ -1129,7 +1129,7 @@ fn convert_to_u32(all: &Vec<u8>, width: u32) -> Vec<Vec<u32>> {
     data
 }
 
-fn parse_impl<R: Read>(reader: R, open_opts: &mut Option<OpenOptions<R>>) -> Result<Map, TiledError>
+fn parse_impl<R: Read>(reader: R, open_opts: Option<&mut OpenOptions<R>>) -> Result<Map, TiledError>
 {
     let mut parser = EventReader::new(reader);
     loop {
@@ -1166,11 +1166,11 @@ pub fn parse_file_with_fn<P, R>(path: P, mut open_fn: Box<dyn FnMut(&Path) -> Op
     let path = path.as_ref();
     let file = open_fn(path)
         .ok_or(TiledError::Other(format!("Map file not found: {:?}", path)))?;
-    let open_opts = OpenOptions {
+    let mut open_opts = OpenOptions {
         map_path: path,
         open_fn,
     };
-    parse_impl(file, &mut Some(open_opts))
+    parse_impl(file, Some(&mut open_opts))
 }
 
 /// Parse a file hopefully containing a Tiled map and try to parse it.  If the
@@ -1180,14 +1180,14 @@ pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Map, TiledError> {
     let path = path.as_ref();
     let file = File::open(path)
         .map_err(|_| TiledError::Other(format!("Map file not found: {:?}", path)))?;
-    let open_opts = OpenOptions::new(path);
-    parse_impl(file, &mut Some(open_opts))
+    let mut open_opts = OpenOptions::new(path);
+    parse_impl(file, Some(&mut open_opts))
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled file and try to
 /// parse it.
 pub fn parse<R: Read>(reader: R) -> Result<Map, TiledError> {
-    parse_impl(reader, &mut None)
+    parse_impl(reader, None)
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled tileset.
