@@ -530,6 +530,11 @@ impl Tileset {
             tiles: tiles,
         })
     }
+
+    pub fn get_tile_by_gid(&self, gid: u32) -> Option<&Tile> {
+        let tile_id = gid - self.first_gid;
+        self.tiles.iter().find(|tile| tile.id == tile_id)
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
