@@ -159,7 +159,7 @@ struct OpenOptions<'path, R>
     where R: Read,
 {
     map_path: &'path Path,
-    open_fn: Box<dyn Fn(&Path) -> Option<R>>,
+    open_fn: Box<dyn FnMut(&Path) -> Option<R>>,
 }
 
 impl<'path> OpenOptions<'path, File>
@@ -265,7 +265,7 @@ impl Map {
     fn new<R: Read>(
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
-        open_opts: &Option<OpenOptions<R>>,
+        open_opts: &mut Option<OpenOptions<R>>,
     ) -> Result<Map, TiledError> {
         let (c, (v, o, w, h, tw, th)) = get_attrs!(
             attrs,
@@ -386,7 +386,7 @@ impl Tileset {
     fn new<R: Read>(
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
-        open_opts: &Option<OpenOptions<R>>,
+        open_opts: &mut Option<OpenOptions<R>>,
     ) -> Result<Tileset, TiledError> {
         Tileset::new_internal(parser, &attrs).or_else(|_| Tileset::new_reference(&attrs, open_opts))
     }
@@ -437,7 +437,7 @@ impl Tileset {
 
     fn new_reference<R: Read>(
         attrs: &Vec<OwnedAttribute>,
-        open_opts: &Option<OpenOptions<R>>,
+        open_opts: &mut Option<OpenOptions<R>>,
     ) -> Result<Tileset, TiledError> {
         let ((), (first_gid, source)) = get_attrs!(
             attrs,
@@ -449,7 +449,7 @@ impl Tileset {
             TiledError::MalformedAttributes("tileset must have a firstgid, name tile width and height with correct types".to_string())
         );
 
-        let open_opts = open_opts.as_ref().ok_or(TiledError::Other("Maps with external tilesets must know their file location.  See parse_with_path(Path).".to_string()))?;
+        let open_opts = open_opts.as_mut().ok_or(TiledError::Other("Maps with external tilesets must know their file location.  See parse_with_path(Path).".to_string()))?;
 
         let tileset_path = open_opts.map_path.with_file_name(source);
         let tileset_path = tileset_path.as_ref();
@@ -1129,7 +1129,7 @@ fn convert_to_u32(all: &Vec<u8>, width: u32) -> Vec<Vec<u32>> {
     data
 }
 
-fn parse_impl<R: Read>(reader: R, open_opts: &Option<OpenOptions<R>>) -> Result<Map, TiledError>
+fn parse_impl<R: Read>(reader: R, open_opts: &mut Option<OpenOptions<R>>) -> Result<Map, TiledError>
 {
     let mut parser = EventReader::new(reader);
     loop {
@@ -1159,9 +1159,9 @@ fn parse_impl<R: Read>(reader: R, open_opts: &Option<OpenOptions<R>>) -> Result<
 //    parse_impl(reader, Some(OpenOptions::new(path)))
 //}
 
-pub fn parse_file_with_fn<P, F, R>(path: P, open_fn: F) -> Result<Map, TiledError>
+pub fn parse_file_with_fn<P, F, R>(path: P, mut open_fn: F) -> Result<Map, TiledError>
     where P: AsRef<Path>,
-          F: Fn(&Path) -> Option<R> + 'static,
+          F: FnMut(&Path) -> Option<R> + 'static,
           R: Read,
 {
     let path = path.as_ref();
@@ -1171,7 +1171,7 @@ pub fn parse_file_with_fn<P, F, R>(path: P, open_fn: F) -> Result<Map, TiledErro
         map_path: path,
         open_fn: Box::new(open_fn),
     };
-    parse_impl(file, &Some(open_opts))
+    parse_impl(file, &mut Some(open_opts))
 }
 
 /// Parse a file hopefully containing a Tiled map and try to parse it.  If the
@@ -1182,13 +1182,13 @@ pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Map, TiledError> {
     let file = File::open(path)
         .map_err(|_| TiledError::Other(format!("Map file not found: {:?}", path)))?;
     let open_opts = OpenOptions::new(path);
-    parse_impl(file, &Some(open_opts))
+    parse_impl(file, &mut Some(open_opts))
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled file and try to
 /// parse it.
 pub fn parse<R: Read>(reader: R) -> Result<Map, TiledError> {
-    parse_impl(reader, &None)
+    parse_impl(reader, &mut None)
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled tileset.
