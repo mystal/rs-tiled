@@ -155,6 +155,27 @@ impl std::error::Error for TiledError {
     }
 }
 
+struct OpenOptions<'path, R>
+    where R: Read,
+{
+    map_path: &'path Path,
+    open_fn: Box<dyn Fn(&Path) -> Option<R>>,
+}
+
+impl<'path> OpenOptions<'path, File>
+{
+    fn new(map_path: &'path Path) -> Self {
+        let open_fn = Box::new(|path: &Path| {
+            File::open(path)
+                .ok()
+        });
+        Self {
+            map_path,
+            open_fn,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum PropertyValue {
     BoolValue(bool),
@@ -244,7 +265,7 @@ impl Map {
     fn new<R: Read>(
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
-        map_path: Option<&Path>,
+        open_opts: &Option<OpenOptions<R>>,
     ) -> Result<Map, TiledError> {
         let (c, (v, o, w, h, tw, th)) = get_attrs!(
             attrs,
@@ -270,7 +291,7 @@ impl Map {
         let mut layer_index = 0;
         parse_tag!(parser, "map", {
             "tileset" => | attrs| {
-                tilesets.push(try!(Tileset::new(parser, attrs, map_path)));
+                tilesets.push(try!(Tileset::new(parser, attrs, open_opts)));
                 Ok(())
             },
             "layer" => |attrs| {
@@ -365,9 +386,9 @@ impl Tileset {
     fn new<R: Read>(
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
-        map_path: Option<&Path>,
+        open_opts: &Option<OpenOptions<R>>,
     ) -> Result<Tileset, TiledError> {
-        Tileset::new_internal(parser, &attrs).or_else(|_| Tileset::new_reference(&attrs, map_path))
+        Tileset::new_internal(parser, &attrs).or_else(|_| Tileset::new_reference(&attrs, open_opts))
     }
 
     fn new_internal<R: Read>(
@@ -414,9 +435,9 @@ impl Tileset {
         })
     }
 
-    fn new_reference(
+    fn new_reference<R: Read>(
         attrs: &Vec<OwnedAttribute>,
-        map_path: Option<&Path>,
+        open_opts: &Option<OpenOptions<R>>,
     ) -> Result<Tileset, TiledError> {
         let ((), (first_gid, source)) = get_attrs!(
             attrs,
@@ -428,13 +449,16 @@ impl Tileset {
             TiledError::MalformedAttributes("tileset must have a firstgid, name tile width and height with correct types".to_string())
         );
 
-        let tileset_path = map_path.ok_or(TiledError::Other("Maps with external tilesets must know their file location.  See parse_with_path(Path).".to_string()))?.with_file_name(source);
-        let file = File::open(&tileset_path).map_err(|_| {
+        let open_opts = open_opts.as_ref().ok_or(TiledError::Other("Maps with external tilesets must know their file location.  See parse_with_path(Path).".to_string()))?;
+
+        let tileset_path = open_opts.map_path.with_file_name(source);
+        let tileset_path = tileset_path.as_ref();
+        let file = (open_opts.open_fn)(tileset_path).ok_or(
             TiledError::Other(format!(
                 "External tileset file not found: {:?}",
                 tileset_path
             ))
-        })?;
+        )?;
         Tileset::new_external(file, first_gid)
     }
 
@@ -1105,7 +1129,8 @@ fn convert_to_u32(all: &Vec<u8>, width: u32) -> Vec<Vec<u32>> {
     data
 }
 
-fn parse_impl<R: Read>(reader: R, map_path: Option<&Path>) -> Result<Map, TiledError> {
+fn parse_impl<R: Read>(reader: R, open_opts: &Option<OpenOptions<R>>) -> Result<Map, TiledError>
+{
     let mut parser = EventReader::new(reader);
     loop {
         match try!(parser.next().map_err(TiledError::XmlDecodingError)) {
@@ -1113,7 +1138,7 @@ fn parse_impl<R: Read>(reader: R, map_path: Option<&Path>) -> Result<Map, TiledE
                 name, attributes, ..
             } => {
                 if name.local_name == "map" {
-                    return Map::new(&mut parser, attributes, map_path);
+                    return Map::new(&mut parser, attributes, open_opts);
                 }
             }
             XmlEvent::EndDocument => {
@@ -1130,8 +1155,23 @@ fn parse_impl<R: Read>(reader: R, map_path: Option<&Path>) -> Result<Map, TiledE
 /// parse it. This augments `parse` with a file location: some engines
 /// (e.g. Amethyst) simply hand over a byte stream (and file location) for parsing,
 /// in which case this function may be required.
-pub fn parse_with_path<R: Read>(reader: R, path: &Path) -> Result<Map, TiledError> {
-    parse_impl(reader, Some(path))
+//pub fn parse_with_path<R: Read>(reader: R, path: &Path) -> Result<Map, TiledError> {
+//    parse_impl(reader, Some(OpenOptions::new(path)))
+//}
+
+pub fn parse_file_with_fn<P, F, R>(path: P, open_fn: F) -> Result<Map, TiledError>
+    where P: AsRef<Path>,
+          F: Fn(&Path) -> Option<R> + 'static,
+          R: Read,
+{
+    let path = path.as_ref();
+    let file = open_fn(path)
+        .ok_or(TiledError::Other(format!("Map file not found: {:?}", path)))?;
+    let open_opts = OpenOptions {
+        map_path: path,
+        open_fn: Box::new(open_fn),
+    };
+    parse_impl(file, &Some(open_opts))
 }
 
 /// Parse a file hopefully containing a Tiled map and try to parse it.  If the
@@ -1141,13 +1181,14 @@ pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Map, TiledError> {
     let path = path.as_ref();
     let file = File::open(path)
         .map_err(|_| TiledError::Other(format!("Map file not found: {:?}", path)))?;
-    parse_impl(file, Some(path))
+    let open_opts = OpenOptions::new(path);
+    parse_impl(file, &Some(open_opts))
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled file and try to
 /// parse it.
 pub fn parse<R: Read>(reader: R) -> Result<Map, TiledError> {
-    parse_impl(reader, None)
+    parse_impl(reader, &None)
 }
 
 /// Parse a buffer hopefully containing the contents of a Tiled tileset.
