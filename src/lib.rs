@@ -12,6 +12,12 @@ use xml::attribute::OwnedAttribute;
 use xml::reader::XmlEvent;
 use xml::reader::{Error as XmlError, EventReader};
 
+const FLIPPED_HORIZONTALLY_FLAG: u32 = 0x80000000;
+const FLIPPED_VERTICALLY_FLAG: u32 = 0x40000000;
+const FLIPPED_DIAGONALLY_FLAG: u32 = 0x20000000;
+const ALL_FLIP_FLAGS: u32 =
+    FLIPPED_HORIZONTALLY_FLAG | FLIPPED_VERTICALLY_FLAG | FLIPPED_DIAGONALLY_FLAG;
+
 #[derive(Debug, Copy, Clone)]
 pub enum ParseTileError {
     ColourError,
@@ -540,8 +546,6 @@ impl Tileset {
 #[derive(Debug, PartialEq, Clone)]
 pub struct Tile {
     pub id: u32,
-    pub flip_h: bool,
-    pub flip_v: bool,
     pub images: Vec<Image>,
     pub properties: Properties,
     pub objectgroup: Option<ObjectGroup>,
@@ -549,12 +553,6 @@ pub struct Tile {
     pub tile_type: Option<String>,
     pub probability: f32,
 }
-
-const FLIPPED_HORIZONTALLY_FLAG: u32 = 0x8;
-const FLIPPED_VERTICALLY_FLAG: u32 = 0x4;
-const FLIPPED_DIAGONALLY_FLAG: u32 = 0x2;
-const ALL_FLIP_FLAGS: u32 =
-    FLIPPED_HORIZONTALLY_FLAG | FLIPPED_VERTICALLY_FLAG | FLIPPED_DIAGONALLY_FLAG;
 
 impl Tile {
     fn new<R: Read>(
@@ -572,12 +570,6 @@ impl Tile {
             ],
             TiledError::MalformedAttributes("tile must have an id with the correct type".to_string())
         );
-
-        let flags = (id & ALL_FLIP_FLAGS) >> 28;
-        let id: u32 = id & !ALL_FLIP_FLAGS;
-        let diagon = flags & FLIPPED_DIAGONALLY_FLAG == FLIPPED_DIAGONALLY_FLAG;
-        let flip_h = (flags & FLIPPED_HORIZONTALLY_FLAG == FLIPPED_HORIZONTALLY_FLAG) ^ diagon;
-        let flip_v = (flags & FLIPPED_VERTICALLY_FLAG == FLIPPED_VERTICALLY_FLAG) ^ diagon;
 
         let mut images = Vec::new();
         let mut properties = HashMap::new();
@@ -603,8 +595,6 @@ impl Tile {
         });
         Ok(Tile {
             id,
-            flip_h,
-            flip_v,
             images,
             properties,
             objectgroup,
@@ -652,6 +642,27 @@ impl Image {
     }
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct TileData(u32);
+
+impl TileData {
+    pub fn gid(&self) -> u32 {
+        self.0 & !ALL_FLIP_FLAGS
+    }
+
+    pub fn flip_h(&self) -> bool {
+        (self.0 & FLIPPED_HORIZONTALLY_FLAG) != 0
+    }
+
+    pub fn flip_v(&self) -> bool {
+        (self.0 & FLIPPED_VERTICALLY_FLAG) != 0
+    }
+
+    pub fn flip_d(&self) -> bool {
+        (self.0 & FLIPPED_DIAGONALLY_FLAG) != 0
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Layer {
     pub name: String,
@@ -659,7 +670,7 @@ pub struct Layer {
     pub visible: bool,
     /// The tiles are arranged in rows. Each tile is a number which can be used
     ///  to find which tileset it belongs to and can then be rendered.
-    pub tiles: Vec<Vec<u32>>,
+    pub tiles: Vec<Vec<TileData>>,
     pub properties: Properties,
     pub layer_index: u32,
 }
@@ -829,7 +840,7 @@ pub enum ObjectShape {
 pub struct Object {
     pub id: u32,
     // TODO: Put this in the Tile ObjectShape.
-    pub gid: u32,
+    pub tile_data: TileData,
     pub name: String,
     pub obj_type: String,
     pub x: f32,
@@ -870,7 +881,7 @@ impl Object {
         let h = h.unwrap_or(0f32);
         let r = r.unwrap_or(0f32);
         let id = id.unwrap_or(0u32);
-        let gid = gid.unwrap_or(0u32);
+        let tile_data = TileData(gid.unwrap_or(0u32));
         let n = n.unwrap_or(String::new());
         let t = t.unwrap_or(String::new());
         let mut shape = None;
@@ -905,7 +916,7 @@ impl Object {
 
         Ok(Object {
             id: id,
-            gid: gid,
+            tile_data: tile_data,
             name: n.clone(),
             obj_type: t.clone(),
             x: x,
@@ -1006,7 +1017,7 @@ fn parse_data<R: Read>(
     parser: &mut EventReader<R>,
     attrs: Vec<OwnedAttribute>,
     width: u32,
-) -> Result<Vec<Vec<u32>>, TiledError> {
+) -> Result<Vec<Vec<TileData>>, TiledError> {
     let ((e, c), ()) = get_attrs!(
         attrs,
         optionals: [
@@ -1024,7 +1035,7 @@ fn parse_data<R: Read>(
             ))
         }
         (Some(e), None) => match e.as_ref() {
-            "base64" => return parse_base64(parser).map(|v| convert_to_u32(&v, width)),
+            "base64" => return parse_base64(parser).map(|v| convert_to_tile_data(&v, width)),
             "csv" => return decode_csv(parser),
             e => return Err(TiledError::Other(format!("Unknown encoding format {}", e))),
         },
@@ -1032,12 +1043,12 @@ fn parse_data<R: Read>(
             ("base64", "zlib") => {
                 return parse_base64(parser)
                     .and_then(decode_zlib)
-                    .map(|v| convert_to_u32(&v, width))
+                    .map(|v| convert_to_tile_data(&v, width))
             }
             ("base64", "gzip") => {
                 return parse_base64(parser)
                     .and_then(decode_gzip)
-                    .map(|v| convert_to_u32(&v, width))
+                    .map(|v| convert_to_tile_data(&v, width))
             }
             (e, c) => {
                 return Err(TiledError::Other(format!(
@@ -1089,11 +1100,11 @@ fn decode_gzip(data: Vec<u8>) -> Result<Vec<u8>, TiledError> {
     Ok(data)
 }
 
-fn decode_csv<R: Read>(parser: &mut EventReader<R>) -> Result<Vec<Vec<u32>>, TiledError> {
+fn decode_csv<R: Read>(parser: &mut EventReader<R>) -> Result<Vec<Vec<TileData>>, TiledError> {
     loop {
         match try!(parser.next().map_err(TiledError::XmlDecodingError)) {
             XmlEvent::Characters(s) => {
-                let mut rows: Vec<Vec<u32>> = Vec::new();
+                let mut rows: Vec<Vec<TileData>> = Vec::new();
                 for row in s.split('\n') {
                     if row.trim() == "" {
                         continue;
@@ -1101,7 +1112,7 @@ fn decode_csv<R: Read>(parser: &mut EventReader<R>) -> Result<Vec<Vec<u32>>, Til
                     rows.push(
                         row.split(',')
                             .filter(|v| v.trim() != "")
-                            .map(|v| v.replace('\r', "").parse().unwrap())
+                            .map(|v| TileData(v.replace('\r', "").parse::<u32>().unwrap()))
                             .collect(),
                     );
                 }
@@ -1117,7 +1128,7 @@ fn decode_csv<R: Read>(parser: &mut EventReader<R>) -> Result<Vec<Vec<u32>>, Til
     }
 }
 
-fn convert_to_u32(all: &Vec<u8>, width: u32) -> Vec<Vec<u32>> {
+fn convert_to_tile_data(all: &Vec<u8>, width: u32) -> Vec<Vec<TileData>> {
     let mut data = Vec::new();
     for chunk in all.chunks((width * 4) as usize) {
         let mut row = Vec::new();
@@ -1127,7 +1138,7 @@ fn convert_to_u32(all: &Vec<u8>, width: u32) -> Vec<Vec<u32>> {
                 + ((chunk[start + 2] as u32) << 16)
                 + ((chunk[start + 1] as u32) << 8)
                 + chunk[start] as u32;
-            row.push(n);
+            row.push(TileData(n));
         }
         data.push(row);
     }
