@@ -26,14 +26,15 @@ fn test_gzip_and_zlib_encoded_and_raw_are_the_same() {
 fn test_external_tileset() {
     let r = read_from_file(&Path::new("assets/tiled_base64.tmx")).unwrap();
     let e = read_from_file_with_path(&Path::new("assets/tiled_base64_external.tmx")).unwrap();
-    assert_eq!(r, e);
+    assert_eq!(r.tilesets[0].data, e.tilesets[0].data);
 }
 
 #[test]
 fn test_just_tileset() {
     let r = read_from_file(&Path::new("assets/tiled_base64.tmx")).unwrap();
-    let t = parse_tileset(File::open(Path::new("assets/tilesheet.tsx")).unwrap(), 1).unwrap();
-    assert_eq!(r.tilesets[0], t);
+    let tileset_path = Path::new("assets/tilesheet.tsx");
+    let t = parse_tileset(File::open(tileset_path).unwrap(), tileset_path, 1).unwrap();
+    assert_eq!(r.tilesets[0].data, t.data);
 }
 
 #[test]
@@ -84,7 +85,7 @@ fn test_image_layers() {
 fn test_tile_property() {
     let r = read_from_file(&Path::new("assets/tiled_base64.tmx")).unwrap();
     let prop_value: String = if let Some(&PropertyValue::StringValue(ref v)) =
-        r.tilesets[0].tiles[0].properties.get("a tile property")
+        r.tilesets[0].data.tiles[0].properties.get("a tile property")
     {
         v.clone()
     } else {
@@ -110,7 +111,7 @@ fn test_object_group_property() {
 fn test_tileset_property() {
     let r = read_from_file(&Path::new("assets/tiled_base64.tmx")).unwrap();
     let prop_value: String = if let Some(&PropertyValue::StringValue(ref v)) =
-        r.tilesets[0].properties.get("tileset property")
+        r.tilesets[0].data.properties.get("tileset property")
     {
         v.clone()
     } else {
